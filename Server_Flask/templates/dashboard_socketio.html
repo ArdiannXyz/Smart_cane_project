@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Smart Cane - RealTime Dashboard</title>
+
+  <!-- Socket.IO -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+  <!-- Leaflet.js untuk peta -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- Toastify untuk notifikasi realtime -->
+  <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+
+  <style>
+    body{font-family:Arial, Helvetica, sans-serif;background:#f7f7f9;padding:16px}
+    h1{margin:0 0 12px}
+    .layout{display:flex;gap:16px}
+    .left{flex:1}
+    .right{width:420px}
+    .card{background:white;padding:12px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.08);margin-bottom:12px}
+    img.preview{max-width:100%;border-radius:6px}
+    .logs{height:300px;overflow:auto;background:#111;color:#0f0;padding:8px;border-radius:6px;font-family:monospace;font-size:12px}
+    #map{height:280px;width:100%;border-radius:6px}
+    .map-link{display:inline-block;margin-top:6px}
+  </style>
+</head>
+<body>
+  <h1>📊 Smart Cane — Real-Time Dashboard</h1>
+  <div class="layout">
+    <div class="left">
+      <div class="card">
+        <h3>Latest Detection</h3>
+        <div id="latest"><p>No images yet</p></div>
+      </div>
+
+      <div class="card">
+        <h3>Gallery (recent)</h3>
+        <div id="gallery" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="card">
+        <h3>Logs</h3>
+        <div id="logs" class="logs"></div>
+      </div>
+
+      <div class="card">
+        <h3>Last Location</h3>
+        <div id="location">No location yet</div>
+        <div id="map"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ===============================
+  // Socket.IO connection
+  // ===============================
+  const socket = io();
+  const gallery = document.getElementById('gallery');
+  const latest = document.getElementById('latest');
+  const logs = document.getElementById('logs');
+  const locationDiv = document.getElementById('location');
+  let map, marker;
+
+  function toast(msg, color="#4CAF50") {
+    Toastify({
+      text: msg,
+      duration: 4000,
+      close: true,
+      gravity: "top",
+      position: "right",
+      backgroundColor: color,
+      stopOnFocus: true
+    }).showToast();
+  }
+
+  function addLog(text){
+    logs.innerHTML = text + '\n' + logs.innerHTML;
+  }
+
+  function addGalleryItem(filename){
+    const url = `/classified/${filename}`;
+    const div = document.createElement('div');
+    div.style.width = '160px';
+    div.innerHTML = `<img src="${url}" style="width:100%;border-radius:6px"><div style="font-size:12px;word-break:break-all">${filename}</div>`;
+    gallery.prepend(div);
+    latest.innerHTML = `<img class="preview" src="${url}"><p style="margin:6px 0 0">${filename}</p>`;
+  }
+
+  function updateMap(lat, lon){
+    if(!map){
+      map = L.map('map').setView([lat, lon], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+      marker = L.marker([lat, lon]).addTo(map);
+    } else {
+      marker.setLatLng([lat, lon]);
+      map.setView([lat, lon], 15);
+    }
+  }
+
+  socket.on('connect', ()=> {
+    addLog('[socket] connected');
+    toast("Connected to server", "#2196F3");
+  });
+
+  socket.on('initial', (data) => {
+    if(data.files && data.files.length){
+      data.files.forEach(f=> addGalleryItem(f));
+    }
+    if(data.last_location && data.last_location.latitude){
+      const loc = data.last_location;
+      locationDiv.innerHTML = `<div>Lat: ${loc.latitude}<br>Lon: ${loc.longitude}</div>`;
+      updateMap(loc.latitude, loc.longitude);
+    }
+  });
+
+  socket.on('new_image', (payload) => {
+    addLog(`[image] ${payload.filename} | detected=${payload.detected} | count=${payload.count}`);
+    addGalleryItem(payload.filename);
+    if(payload.detected){
+      toast(`⚠️ Object detected (${payload.count})`, "#FF5722");
+    } else {
+      toast("✅ No object detected", "#4CAF50");
+    }
+  });
+
+  socket.on('new_log', (payload) => {
+    addLog(payload.log);
+  });
+
+  socket.on('new_location', (payload) => {
+    addLog(`[location] ${payload.latitude}, ${payload.longitude} @ ${payload.time}`);
+    locationDiv.innerHTML = `<div>Lat: ${payload.latitude}<br>Lon: ${payload.longitude}</div>
+      <a class="map-link" href="https://www.google.com/maps?q=${payload.latitude},${payload.longitude}" target="_blank">Open in Google Maps</a>`;
+    updateMap(payload.latitude, payload.longitude);
+    toast("📍 New location received", "#FFC107");
+  });
+
+  socket.on('disconnect', ()=> {
+    addLog('[socket] disconnected');
+    toast("Disconnected", "#f44336");
+  });
+</script>
+</body>
+</html>
