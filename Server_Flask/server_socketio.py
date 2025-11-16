@@ -74,7 +74,7 @@ def send_telegram_location(lat, lon, caption=""):
 
 @app.route('/')
 def root():
-    return render_template('dashboard_socketio.html')
+    return render_template('dashboard.html')
 
 @app.route('/classified/<path:filename>')
 def classified_file(filename):
