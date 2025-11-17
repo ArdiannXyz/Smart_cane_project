@@ -1,17 +1,19 @@
 # server_socketio.py
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, Response
 from flask_socketio import SocketIO, emit
 from PIL import Image
 import os, io
 import cv2
 import numpy as np
-import requests
 from datetime import datetime
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+import base64
+import threading
+import time
+import torch
 
 # Flask + SocketIO
 app = Flask(__name__, template_folder='templates', static_folder='static')
-socketio = SocketIO(app, cors_allowed_origins="*")  # allow local testing
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Folders
 UPLOAD_FOLDER = 'uploads'
@@ -20,57 +22,103 @@ LOG_FILE = 'log.txt'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CLASSIFIED_FOLDER, exist_ok=True)
 
-# Last known location (dipakai untuk kirim otomatis)
+# Global variables untuk streaming
+latest_frame = None
+latest_detection_frame = None
+frame_lock = threading.Lock()
+
+# Last known location (untuk GPS nanti, tidak untuk ESP32-CAM)
 last_location = {"latitude": None, "longitude": None}
 
-# Simple person detection (Haar cascade) - optional
-cascade_path = cv2.data.haarcascades + 'haarcascade_fullbody.xml'
-person_cascade = cv2.CascadeClassifier(cascade_path)
-upper_body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
+# Load YOLOv5 Model
+print("Loading YOLOv5 model...")
+try:
+    model = torch.hub.load('ultralytics/yolov5', 'custom', 
+                          path=r'C:\Users\ADVAN\Documents\Arduino\Smartcane\Smart_cane_project\Server_Flask\models\best.pt',
+                          force_reload=True)
+    model.conf = 0.5  # Confidence threshold
+    print("YOLOv5 model loaded successfully!")
+except Exception as e:
+    print(f"Error loading YOLOv5 model: {e}")
+    model = None
 
-def detect_objects(image_array):
-    gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
-    persons = person_cascade.detectMultiScale(gray, 1.1, 5)
-    if len(persons) == 0:
-        persons = upper_body_cascade.detectMultiScale(gray, 1.1, 5)
-    annotated = image_array.copy()
-    for (x,y,w,h) in persons:
-        cv2.rectangle(annotated, (x,y), (x+w,y+h), (0,255,0), 2)
-    return len(persons)>0, len(persons), annotated
+# Class names sesuai dengan model Anda
+class_names = {
+    0: 'ch',  # kursi
+    1: 'do',  # pintu
+    2: 'fe',  # pagar
+    3: 'gb',  # tempat sampah
+    4: 'ob',  # halangan
+    5: 'pl',  # tanaman
+    6: 'po',  # lubang
+    7: 'st',  # tangga
+    8: 'ta',  # meja
+    9: 've'   # kendaraan
+}
+
+def detect_objects_yolov5(image_array):
+    """
+    Deteksi objek menggunakan YOLOv5
+    Returns: (detected, count, annotated_image, detections_list)
+    """
+    if model is None:
+        return False, 0, image_array, []
+    
+    try:
+        # Convert BGR to RGB
+        image_rgb = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+        
+        # Perform detection
+        results = model(image_rgb)
+        
+        # Get detections
+        detections = results.pandas().xyxy[0]
+        
+        # Annotate image
+        annotated_image = image_array.copy()
+        detection_count = 0
+        detections_list = []
+        
+        for _, detection in detections.iterrows():
+            if detection['confidence'] > model.conf:
+                detection_count += 1
+                
+                # Get coordinates
+                x1, y1, x2, y2 = int(detection['xmin']), int(detection['ymin']), int(detection['xmax']), int(detection['ymax'])
+                
+                # Get class name
+                class_id = detection['class']
+                class_name = class_names.get(class_id, f'class_{class_id}')
+                confidence = detection['confidence']
+                
+                # Draw bounding box
+                color = (0, 255, 0)  # Green
+                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
+                
+                # Draw label
+                label = f"{class_name} {confidence:.2f}"
+                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                cv2.rectangle(annotated_image, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), color, -1)
+                cv2.putText(annotated_image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                
+                detections_list.append({
+                    'class': class_name,
+                    'confidence': float(confidence),
+                    'bbox': [x1, y1, x2, y2]
+                })
+        
+        return detection_count > 0, detection_count, annotated_image, detections_list
+        
+    except Exception as e:
+        print(f"Detection error: {e}")
+        return False, 0, image_array, []
 
 def write_log(text):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {text}"
     with open(LOG_FILE, 'a') as f:
         f.write(line + "\n")
-    # juga emit ke dashboard
     socketio.emit('new_log', {'log': line})
-
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=5)
-    except Exception as e:
-        print("Telegram message error:", e)
-
-def send_telegram_photo(path, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    try:
-        with open(path, 'rb') as ph:
-            files = {'photo': ph}
-            data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': caption, 'parse_mode': 'HTML'}
-            requests.post(url, files=files, data=data, timeout=10)
-    except Exception as e:
-        print("Telegram photo error:", e)
-
-def send_telegram_location(lat, lon, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendLocation"
-    try:
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "latitude": lat, "longitude": lon}, timeout=5)
-        if caption:
-            send_telegram_message(caption)
-    except Exception as e:
-        print("Telegram location error:", e)
 
 @app.route('/')
 def root():
@@ -80,6 +128,104 @@ def root():
 def classified_file(filename):
     return send_from_directory(CLASSIFIED_FOLDER, filename)
 
+# Endpoint untuk streaming real-time dengan YOLOv5
+@app.route('/stream', methods=['POST'])
+def stream_video():
+    global latest_frame, latest_detection_frame
+    
+    if 'image' not in request.files:
+        return jsonify({"success": False, "message": "No image file"}), 400
+    
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({"success": False, "message": "Empty filename"}), 400
+    
+    try:
+        # Baca dan proses frame
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        image_array = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Deteksi objek dengan YOLOv5
+        detected, count, annotated_image, detections = detect_objects_yolov5(image_array)
+        
+        # Update frame terbaru untuk streaming
+        with frame_lock:
+            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            latest_frame = buffer.tobytes()
+            
+            # Simpan juga frame deteksi terakhir untuk Latest Detection
+            _, detection_buffer = cv2.imencode('.jpg', annotated_image)
+            latest_detection_frame = detection_buffer.tobytes()
+        
+        # Konversi ke base64 untuk dikirim via Socket.IO
+        _, buffer = cv2.imencode('.jpg', annotated_image)
+        jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+        
+        # Kirim frame ke semua client yang terhubung
+        socketio.emit('video_frame', {
+            'image_data': f'data:image/jpeg;base64,{jpg_as_text}',
+            'timestamp': datetime.now().strftime('%H:%M:%S'),
+            'detected': detected,
+            'count': count,
+            'detections': detections
+        })
+        
+        # Log deteksi jika ada objek terdeteksi
+        if detected:
+            detection_text = ", ".join([f"{d['class']}({d['confidence']:.2f})" for d in detections])
+            write_log(f"Detected: {detection_text}")
+        
+        return jsonify({
+            "success": True, 
+            "detected": detected, 
+            "count": count,
+            "detections": detections
+        })
+        
+    except Exception as e:
+        print(f"Stream error: {e}")
+        write_log(f"Stream error: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+# Endpoint MJPEG stream untuk browser
+@app.route('/video_feed')
+def video_feed():
+    def generate():
+        while True:
+            with frame_lock:
+                if latest_frame is not None:
+                    frame = latest_frame
+                else:
+                    # Frame placeholder jika belum ada frame
+                    img = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(img, "Waiting for ESP32-CAM...", (50, 240), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    _, buffer = cv2.imencode('.jpg', img)
+                    frame = buffer.tobytes()
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            time.sleep(0.05)  # ~20 FPS
+    
+    return Response(generate(),
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# Endpoint untuk mendapatkan frame deteksi terakhir (Latest Detection)
+@app.route('/latest_detection')
+def latest_detection():
+    with frame_lock:
+        if latest_detection_frame is not None:
+            return Response(latest_detection_frame, mimetype='image/jpeg')
+        else:
+            # Return placeholder image
+            img = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(img, "No detection yet", (50, 240), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            _, buffer = cv2.imencode('.jpg', img)
+            return Response(buffer.tobytes(), mimetype='image/jpeg')
+
+# Endpoint upload_image untuk single image capture
 @app.route('/upload_image', methods=['POST'])
 def upload_image():
     """
@@ -102,37 +248,38 @@ def upload_image():
         # Save original
         Image.fromarray(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)).save(original_path)
 
-        # Detect (optional)
-        detected, count, annotated = detect_objects(image_array)
+        # Detect dengan YOLOv5
+        detected, count, annotated, detections = detect_objects_yolov5(image_array)
 
         # Save annotated result
         cv2.imwrite(classified_path, annotated)
 
         # Log and emit to dashboard
-        log_msg = f"Detected: {detected} | Count: {count} | File: {classified_path}"
+        detection_text = ", ".join([f"{d['class']}({d['confidence']:.2f})" for d in detections]) if detected else "None"
+        log_msg = f"YOLOv5 Detection: {detected} | Count: {count} | Objects: {detection_text}"
         write_log(log_msg)
 
-        # Emit event with metadata so dashboard updates instantly
+        # Emit event dengan metadata
         socketio.emit('new_image', {
             'filename': os.path.basename(classified_path),
             'timestamp': timestamp,
             'detected': detected,
-            'count': count
+            'count': count,
+            'detections': detections
         })
 
-        # If detected send telegram and optionally location
-        if detected:
-            caption = f"⚠️ <b>Objek Terdeteksi!</b>\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n👥 Jumlah: {count}"
-            send_telegram_photo(classified_path, caption)
-            if last_location['latitude'] and last_location['longitude']:
-                send_telegram_location(last_location['latitude'], last_location['longitude'],
-                                       f"📍 Lokasi terkini dari deteksi: https://www.google.com/maps?q={last_location['latitude']},{last_location['longitude']}")
-
-        return jsonify({"success": True, "detected": detected, "count": count, "file": os.path.basename(classified_path)})
+        return jsonify({
+            "success": True, 
+            "detected": detected, 
+            "count": count, 
+            "file": os.path.basename(classified_path),
+            "detections": detections
+        })
     except Exception as e:
         write_log(f"Error processing image: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
+# Endpoint untuk update location (untuk GPS nanti)
 @app.route('/send_location', methods=['POST'])
 def send_location():
     global last_location
@@ -149,7 +296,7 @@ def send_location():
 
     return jsonify({"success": True, "location": last_location})
 
-# Socket.IO simple connect handler (optional)
+# Socket.IO event handlers
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')

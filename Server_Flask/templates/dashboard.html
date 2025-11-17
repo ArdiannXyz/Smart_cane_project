@@ -1,153 +1,273 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <title>Smart Cane - RealTime Dashboard</title>
-
-  <!-- Socket.IO -->
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-
-  <!-- Leaflet.js untuk peta -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-
-  <!-- Toastify untuk notifikasi realtime -->
-  <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
-
-  <style>
-    body{font-family:Arial, Helvetica, sans-serif;background:#f7f7f9;padding:16px}
-    h1{margin:0 0 12px}
-    .layout{display:flex;gap:16px}
-    .left{flex:1}
-    .right{width:420px}
-    .card{background:white;padding:12px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.08);margin-bottom:12px}
-    img.preview{max-width:100%;border-radius:6px}
-    .logs{height:300px;overflow:auto;background:#111;color:#0f0;padding:8px;border-radius:6px;font-family:monospace;font-size:12px}
-    #map{height:280px;width:100%;border-radius:6px}
-    .map-link{display:inline-block;margin-top:6px}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Cane — Real-Time Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .video-container {
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .video-placeholder {
+            width: 100%;
+            height: 400px;
+            background: #1a1a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 18px;
+        }
+        .live-video {
+            width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+        }
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .gallery img {
+            width: 100%;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .logs {
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 12px;
+        }
+        .status-online {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .status-offline {
+            color: #f44336;
+            font-weight: bold;
+        }
+        .detection-info {
+            background: #e8f5e8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+    </style>
 </head>
 <body>
-  <h1>📊 Smart Cane — Real-Time Dashboard</h1>
-  <div class="layout">
-    <div class="left">
-      <div class="card">
-        <h3>Latest Detection</h3>
-        <div id="latest"><p>No images yet</p></div>
-      </div>
+    <div class="container">
+        <h1>Smart Cane — Real-Time Dashboard</h1>
+        
+        <div class="grid">
+            <!-- Kolom Kiri -->
+            <div>
+                <!-- Latest Detection -->
+                <div class="card">
+                    <h2>Latest Detection</h2>
+                    <div class="video-container">
+                        <img id="latest-detection-img" class="live-video" src="/latest_detection" alt="Latest Detection">
+                    </div>
+                    <div id="detection-info" class="detection-info">
+                        No objects detected yet
+                    </div>
+                </div>
 
-      <div class="card">
-        <h3>Gallery (recent)</h3>
-        <div id="gallery" style="display:flex;flex-wrap:wrap;gap:8px"></div>
-      </div>
+                <!-- Gallery -->
+                <div class="card">
+                    <h2>Gallery (recent)</h2>
+                    <div id="gallery" class="gallery">
+                        <!-- Gambar akan dimuat di sini -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Kolom Kanan -->
+            <div>
+                <!-- Live Video Stream -->
+                <div class="card">
+                    <h2>Live Video Stream</h2>
+                    <div class="video-container">
+                        <img id="live-video" class="live-video" src="/video_feed" alt="Live Feed">
+                    </div>
+                    <div id="stream-status" class="status-offline">Stream: Waiting for ESP32-CAM</div>
+                    <div id="stream-info">
+                        Objects: <span id="object-count">0</span> | 
+                        Last Update: <span id="last-update">-</span>
+                    </div>
+                </div>
+
+                <!-- Last Location -->
+                <div class="card">
+                    <h2>Last Location</h2>
+                    <div id="location-info">No location yet</div>
+                    <div id="map-link" style="margin-top: 10px;"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="right">
-      <div class="card">
-        <h3>Logs</h3>
-        <div id="logs" class="logs"></div>
-      </div>
+    <script>
+        // Socket.IO connection
+        const socket = io();
 
-      <div class="card">
-        <h3>Last Location</h3>
-        <div id="location">No location yet</div>
-        <div id="map"></div>
-      </div>
-    </div>
-  </div>
+        // Elements
+        const liveVideo = document.getElementById('live-video');
+        const latestDetectionImg = document.getElementById('latest-detection-img');
+        const streamStatus = document.getElementById('stream-status');
+        const streamInfo = document.getElementById('stream-info');
+        const objectCount = document.getElementById('object-count');
+        const lastUpdate = document.getElementById('last-update');
+        const detectionInfo = document.getElementById('detection-info');
+        const logsDiv = document.getElementById('logs');
+        const galleryDiv = document.getElementById('gallery');
+        const locationInfo = document.getElementById('location-info');
+        const mapLink = document.getElementById('map-link');
 
-<script>
-  // ===============================
-  // Socket.IO connection
-  // ===============================
-  const socket = io();
-  const gallery = document.getElementById('gallery');
-  const latest = document.getElementById('latest');
-  const logs = document.getElementById('logs');
-  const locationDiv = document.getElementById('location');
-  let map, marker;
+        // Socket event handlers
+        socket.on('connect', function() {
+            addLog('[system] Connected to server');
+            streamStatus.textContent = 'Stream: Connected to server';
+            streamStatus.className = 'status-online';
+        });
 
-  function toast(msg, color="#4CAF50") {
-    Toastify({
-      text: msg,
-      duration: 4000,
-      close: true,
-      gravity: "top",
-      position: "right",
-      backgroundColor: color,
-      stopOnFocus: true
-    }).showToast();
-  }
+        socket.on('disconnect', function() {
+            addLog('[system] Disconnected from server');
+            streamStatus.textContent = 'Stream: Offline';
+            streamStatus.className = 'status-offline';
+        });
 
-  function addLog(text){
-    logs.innerHTML = text + '\n' + logs.innerHTML;
-  }
+        // Handle video frames via Socket.IO (fallback)
+        socket.on('video_frame', function(data) {
+            // Update latest detection image
+            latestDetectionImg.src = data.image_data;
+            
+            // Update detection info
+            if (data.detected && data.detections.length > 0) {
+                const detectionText = data.detections.map(d => 
+                    `${d.class} (${(d.confidence * 100).toFixed(1)}%)`
+                ).join(', ');
+                detectionInfo.innerHTML = `<strong>Detected:</strong> ${detectionText}`;
+            } else {
+                detectionInfo.innerHTML = 'No objects detected';
+            }
+            
+            // Update stream info
+            objectCount.textContent = data.count;
+            lastUpdate.textContent = data.timestamp;
+        });
 
-  function addGalleryItem(filename){
-    const url = `/classified/${filename}`;
-    const div = document.createElement('div');
-    div.style.width = '160px';
-    div.innerHTML = `<img src="${url}" style="width:100%;border-radius:6px"><div style="font-size:12px;word-break:break-all">${filename}</div>`;
-    gallery.prepend(div);
-    latest.innerHTML = `<img class="preview" src="${url}"><p style="margin:6px 0 0">${filename}</p>`;
-  }
+        // Handle new images for gallery
+        socket.on('new_image', function(data) {
+            addLog(`[detection] New image: ${data.filename} - Detected: ${data.detected} (${data.count} objects)`);
+            // Gallery akan diupdate oleh initial data
+        });
 
-  function updateMap(lat, lon){
-    if(!map){
-      map = L.map('map').setView([lat, lon], 15);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap'
-      }).addTo(map);
-      marker = L.marker([lat, lon]).addTo(map);
-    } else {
-      marker.setLatLng([lat, lon]);
-      map.setView([lat, lon], 15);
-    }
-  }
+        // Handle logs
+        socket.on('new_log', function(data) {
+            addLog(data.log);
+        });
 
-  socket.on('connect', ()=> {
-    addLog('[socket] connected');
-    toast("Connected to server", "#2196F3");
-  });
+        // Handle location updates
+        socket.on('new_location', function(data) {
+            locationInfo.innerHTML = `
+                <strong>Latitude:</strong> ${data.latitude}<br>
+                <strong>Longitude:</strong> ${data.longitude}<br>
+                <strong>Time:</strong> ${data.time}
+            `;
+            mapLink.innerHTML = `
+                <a href="https://maps.google.com/?q=${data.latitude},${data.longitude}" 
+                   target="_blank" style="color: #2196F3;">
+                   📍 View on Google Maps
+                </a>
+            `;
+        });
 
-  socket.on('initial', (data) => {
-    if(data.files && data.files.length){
-      data.files.forEach(f=> addGalleryItem(f));
-    }
-    if(data.last_location && data.last_location.latitude){
-      const loc = data.last_location;
-      locationDiv.innerHTML = `<div>Lat: ${loc.latitude}<br>Lon: ${loc.longitude}</div>`;
-      updateMap(loc.latitude, loc.longitude);
-    }
-  });
+        // Handle initial data
+        socket.on('initial', function(data) {
+            // Update gallery
+            updateGallery(data.files);
+            // Update location
+            if (data.last_location.latitude) {
+                locationInfo.innerHTML = `
+                    <strong>Latitude:</strong> ${data.last_location.latitude}<br>
+                    <strong>Longitude:</strong> ${data.last_location.longitude}
+                `;
+            }
+        });
 
-  socket.on('new_image', (payload) => {
-    addLog(`[image] ${payload.filename} | detected=${payload.detected} | count=${payload.count}`);
-    addGalleryItem(payload.filename);
-    if(payload.detected){
-      toast(`⚠️ Object detected (${payload.count})`, "#FF5722");
-    } else {
-      toast("✅ No object detected", "#4CAF50");
-    }
-  });
+        // Helper functions
+        function addLog(text) {
+            const logEntry = document.createElement('div');
+            logEntry.textContent = text;
+            logsDiv.appendChild(logEntry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
 
-  socket.on('new_log', (payload) => {
-    addLog(payload.log);
-  });
+        function updateGallery(files) {
+            galleryDiv.innerHTML = '';
+            files.forEach(file => {
+                const img = document.createElement('img');
+                img.src = `/classified/${file}`;
+                img.alt = file;
+                img.title = file;
+                img.onclick = () => window.open(img.src, '_blank');
+                galleryDiv.appendChild(img);
+            });
+        }
 
-  socket.on('new_location', (payload) => {
-    addLog(`[location] ${payload.latitude}, ${payload.longitude} @ ${payload.time}`);
-    locationDiv.innerHTML = `<div>Lat: ${payload.latitude}<br>Lon: ${payload.longitude}</div>
-      <a class="map-link" href="https://www.google.com/maps?q=${payload.latitude},${payload.longitude}" target="_blank">Open in Google Maps</a>`;
-    updateMap(payload.latitude, payload.longitude);
-    toast("📍 New location received", "#FFC107");
-  });
+        // Refresh latest detection image periodically
+        setInterval(() => {
+            latestDetectionImg.src = '/latest_detection?' + new Date().getTime();
+        }, 1000);
 
-  socket.on('disconnect', ()=> {
-    addLog('[socket] disconnected');
-    toast("Disconnected", "#f44336");
-  });
-</script>
+        // Handle video stream errors
+        liveVideo.onerror = function() {
+            streamStatus.textContent = 'Stream: Error - Retrying...';
+            streamStatus.className = 'status-offline';
+            setTimeout(() => {
+                liveVideo.src = '/video_feed?' + new Date().getTime();
+            }, 3000);
+        };
+
+        liveVideo.onload = function() {
+            streamStatus.textContent = 'Stream: Live';
+            streamStatus.className = 'status-online';
+        };
+    </script>
 </body>
 </html>
