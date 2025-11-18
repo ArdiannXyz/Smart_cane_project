@@ -120,17 +120,17 @@ def write_log(text):
         f.write(line + "\n")
     socketio.emit('new_log', {'log': line})
 
-@app.route('/')
+# ========== ENDPOINT UTAMA UNTUK DASHBOARD DAN STREAMING ==========
+@app.route('/', methods=['GET', 'POST'])
 def root():
-    return render_template('dashboard.html')
-
-@app.route('/classified/<path:filename>')
-def classified_file(filename):
-    return send_from_directory(CLASSIFIED_FOLDER, filename)
-
-# Endpoint untuk streaming real-time dengan YOLOv5
-@app.route('/stream', methods=['POST'])
-def stream_video():
+    """
+    GET: Menampilkan dashboard
+    POST: Menerima streaming dari ESP32-CAM
+    """
+    if request.method == 'GET':
+        return render_template('dashboard.html')
+    
+    # POST request - Handle streaming dari ESP32-CAM
     global latest_frame, latest_detection_frame
     
     if 'image' not in request.files:
@@ -187,6 +187,10 @@ def stream_video():
         print(f"Stream error: {e}")
         write_log(f"Stream error: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/classified/<path:filename>')
+def classified_file(filename):
+    return send_from_directory(CLASSIFIED_FOLDER, filename)
 
 # Endpoint MJPEG stream untuk browser
 @app.route('/video_feed')
