@@ -2,8 +2,9 @@
 import os
 import io
 import platform
+import base64
 from flask import Flask, request, jsonify
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import torch
 from pathlib import Path
 
@@ -102,6 +103,48 @@ print("=" * 50 + "\n")
 
 last_detection = {"object": "none", "all": []}
 
+def draw_bounding_boxes(image, predictions, class_names):
+    """
+    Gambar bounding box dan label pada gambar
+    """
+    draw = ImageDraw.Draw(image)
+    
+    # Colors untuk different classes
+    colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'brown']
+    
+    for i, pred in enumerate(predictions):
+        # Koordinat bounding box
+        x1, y1, x2, y2 = pred[:4]
+        confidence = pred[4]
+        class_id = int(pred[5])
+        
+        # Color berdasarkan class
+        color = colors[class_id % len(colors)]
+        
+        # Draw bounding box
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        
+        # Label text
+        label = f"{class_names[class_id]} {confidence:.2f}"
+        
+        # Background untuk text
+        text_bbox = draw.textbbox((x1, y1), label)
+        draw.rectangle(text_bbox, fill=color)
+        
+        # Text
+        draw.text((x1, y1), label, fill='white')
+    
+    return image
+
+def image_to_base64(image):
+    """
+    Convert PIL Image ke base64 string
+    """
+    buffered = io.BytesIO()
+    image.save(buffered, format="JPEG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/jpeg;base64,{img_str}"
+
 # ========== ROUTES ==========
 
 @app.route("/", methods=["GET"])
@@ -135,7 +178,7 @@ def upload():
             
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         
-        # Save image
+        # Save original image
         idx = len(os.listdir(UPLOAD_FOLDER)) + 1
         img_path = UPLOAD_FOLDER / f"img_{idx}.jpg"
         img.save(img_path)
@@ -151,14 +194,26 @@ def upload():
             predictions = results.xyxy[0]
             classes = model.names
         
+        # Buat copy gambar untuk drawing bounding boxes
+        img_with_boxes = img.copy()
+        
         detected_classes = []
         if len(predictions) > 0:
+            # Draw bounding boxes
+            img_with_boxes = draw_bounding_boxes(img_with_boxes, predictions, classes)
+            
             for pred in predictions:
                 class_id = int(pred[-1])
                 confidence = float(pred[4])
                 detected_classes.append({
                     "class": classes[class_id],
-                    "confidence": round(confidence, 3)
+                    "confidence": round(confidence, 3),
+                    "bbox": {
+                        "x1": float(pred[0]),
+                        "y1": float(pred[1]),
+                        "x2": float(pred[2]),
+                        "y2": float(pred[3])
+                    }
                 })
             
             detected_classes.sort(key=lambda x: x['confidence'], reverse=True)
@@ -172,8 +227,15 @@ def upload():
         else:
             last_detection = {"object": "none", "all": []}
         
+        # Convert image with boxes to base64
+        img_with_boxes_base64 = image_to_base64(img_with_boxes)
+        
         print(f"✓ Detection: {last_detection['object']}")
-        return jsonify({"status": "ok", "detected": last_detection})
+        return jsonify({
+            "status": "ok", 
+            "detected": last_detection,
+            "annotated_image": img_with_boxes_base64
+        })
         
     except Exception as e:
         print(f"✗ Error: {str(e)}")
@@ -193,16 +255,27 @@ def test():
             <style>
                 body { 
                     font-family: Arial, sans-serif; 
-                    max-width: 800px; 
+                    max-width: 1000px; 
                     margin: 50px auto; 
                     padding: 20px; 
                 }
                 h1 { color: #333; }
-                form { 
+                .container {
+                    display: flex;
+                    gap: 20px;
+                    margin: 20px 0;
+                }
+                .upload-section {
+                    flex: 1;
                     background: #f5f5f5; 
                     padding: 20px; 
                     border-radius: 8px; 
-                    margin: 20px 0; 
+                }
+                .results-section {
+                    flex: 1;
+                    background: #f0f8ff; 
+                    padding: 20px; 
+                    border-radius: 8px; 
                 }
                 button { 
                     background: #4CAF50; 
@@ -214,6 +287,10 @@ def test():
                     margin-top: 10px;
                 }
                 button:hover { background: #45a049; }
+                button:disabled {
+                    background: #cccccc;
+                    cursor: not-allowed;
+                }
                 #result { 
                     background: #e8f5e9; 
                     padding: 15px; 
@@ -226,25 +303,76 @@ def test():
                     border-radius: 4px; 
                     overflow-x: auto; 
                 }
-                #preview { 
-                    max-width: 100%; 
-                    margin-top: 10px; 
-                    border-radius: 4px; 
+                .image-container {
+                    margin: 10px 0;
+                    text-align: center;
+                }
+                .image-preview {
+                    max-width: 100%;
+                    max-height: 300px;
+                    border-radius: 4px;
+                    border: 2px solid #ddd;
+                }
+                .detection-info {
+                    background: white;
+                    padding: 10px;
+                    border-radius: 4px;
+                    margin: 10px 0;
+                }
+                .object-name {
+                    font-size: 1.2em;
+                    font-weight: bold;
+                    color: #2E7D32;
+                }
+                .confidence {
+                    color: #666;
+                    font-style: italic;
+                }
+                .bbox-info {
+                    font-size: 0.9em;
+                    color: #555;
                 }
             </style>
         </head>
         <body>
             <h1>🦯 Smart Cane Server Test Page</h1>
-            <p>Upload an image to test object detection</p>
+            <p>Upload an image to test object detection with bounding boxes</p>
             
-            <form id="uploadForm" enctype="multipart/form-data">
-                <input type="file" id="imageInput" accept="image/*" required>
-                <img id="preview" style="display:none;">
-                <br>
-                <button type="submit">🔍 Upload & Detect</button>
-            </form>
-            
-            <div id="result" style="display:none;"></div>
+            <div class="container">
+                <div class="upload-section">
+                    <h2>📤 Upload Image</h2>
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <input type="file" id="imageInput" accept="image/*" required>
+                        <br>
+                        <button type="submit" id="submitBtn">🔍 Upload & Detect</button>
+                    </form>
+                    
+                    <div class="image-container">
+                        <h3>Original Image:</h3>
+                        <img id="preview" class="image-preview" style="display:none;">
+                    </div>
+                </div>
+                
+                <div class="results-section">
+                    <h2>📊 Detection Results</h2>
+                    <div id="result" style="display:none;">
+                        <div class="detection-info">
+                            <div class="object-name" id="objectName">-</div>
+                            <div class="confidence" id="objectConfidence">-</div>
+                        </div>
+                        
+                        <div class="image-container">
+                            <h3>Image with Bounding Boxes:</h3>
+                            <img id="annotatedImage" class="image-preview" style="display:none;">
+                        </div>
+                        
+                        <details>
+                            <summary>View Detailed Detection Data</summary>
+                            <pre id="detailedData"></pre>
+                        </details>
+                    </div>
+                </div>
+            </div>
             
             <script>
                 // Preview image
@@ -264,9 +392,20 @@ def test():
                     e.preventDefault();
                     const file = document.getElementById('imageInput').files[0];
                     const resultDiv = document.getElementById('result');
+                    const submitBtn = document.getElementById('submitBtn');
+                    const objectName = document.getElementById('objectName');
+                    const objectConfidence = document.getElementById('objectConfidence');
+                    const detailedData = document.getElementById('detailedData');
+                    const annotatedImage = document.getElementById('annotatedImage');
                     
+                    // Reset UI
                     resultDiv.style.display = 'block';
-                    resultDiv.innerHTML = '<p>⏳ Processing...</p>';
+                    objectName.textContent = '-';
+                    objectConfidence.textContent = '-';
+                    annotatedImage.style.display = 'none';
+                    detailedData.textContent = 'Processing...';
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '⏳ Processing...';
                     
                     try {
                         const response = await fetch('/upload', {
@@ -278,20 +417,37 @@ def test():
                         
                         if (result.status === 'ok') {
                             const detected = result.detected;
-                            resultDiv.innerHTML = `
-                                <h2>✅ Detection Result:</h2>
-                                <p><strong>Object:</strong> ${detected.object}</p>
-                                ${detected.confidence ? `<p><strong>Confidence:</strong> ${(detected.confidence * 100).toFixed(1)}%</p>` : ''}
-                                <details>
-                                    <summary>View all detections</summary>
-                                    <pre>${JSON.stringify(detected, null, 2)}</pre>
-                                </details>
-                            `;
+                            
+                            // Update detection info
+                            if (detected.object !== 'none') {
+                                objectName.textContent = detected.object;
+                                objectConfidence.textContent = `Confidence: ${(detected.confidence * 100).toFixed(1)}%`;
+                            } else {
+                                objectName.textContent = 'No objects detected';
+                                objectConfidence.textContent = '';
+                            }
+                            
+                            // Show annotated image
+                            if (result.annotated_image) {
+                                annotatedImage.src = result.annotated_image;
+                                annotatedImage.style.display = 'block';
+                            }
+                            
+                            // Show detailed data
+                            detailedData.textContent = JSON.stringify(result, null, 2);
+                            
                         } else {
-                            resultDiv.innerHTML = '<p>❌ Error: ' + result.error + '</p>';
+                            objectName.textContent = '❌ Error';
+                            objectConfidence.textContent = result.error;
+                            detailedData.textContent = JSON.stringify(result, null, 2);
                         }
                     } catch (error) {
-                        resultDiv.innerHTML = '<p>❌ Error: ' + error.message + '</p>';
+                        objectName.textContent = '❌ Error';
+                        objectConfidence.textContent = error.message;
+                        detailedData.textContent = error.stack;
+                    } finally {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '🔍 Upload & Detect';
                     }
                 };
             </script>

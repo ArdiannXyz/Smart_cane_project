@@ -62,17 +62,6 @@
             border-radius: 4px;
             cursor: pointer;
         }
-        .logs {
-            background: #1a1a1a;
-            color: #00ff00;
-            padding: 15px;
-            border-radius: 4px;
-            font-family: monospace;
-            height: 400px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            font-size: 12px;
-        }
         .status-online {
             color: #4CAF50;
             font-weight: bold;
@@ -87,23 +76,25 @@
             border-radius: 4px;
             margin-top: 10px;
         }
+        .info-row {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Smart Cane — Real-Time Dashboard</h1>
+        <h1>📊 Smart Cane — Real-Time Dashboard</h1>
         
         <div class="grid">
-            <!-- Kolom Kiri -->
+            <!-- Kolom Kiri - Live Video Stream -->
             <div>
-                <!-- Latest Detection -->
                 <div class="card">
-                    <h2>Latest Detection</h2>
+                    <h2>Live Video Stream</h2>
                     <div class="video-container">
-                        <img id="latest-detection-img" class="live-video" src="/latest_detection" alt="Latest Detection">
-                    </div>
-                    <div id="detection-info" class="detection-info">
-                        No objects detected yet
+                        <img id="live-video" class="live-video" src="/video_feed" alt="Live Feed">
                     </div>
                 </div>
 
@@ -116,18 +107,25 @@
                 </div>
             </div>
 
-            <!-- Kolom Kanan -->
+            <!-- Kolom Kanan - Informasi -->
             <div>
-                <!-- Live Video Stream -->
+                <!-- Stream Status & Info -->
                 <div class="card">
-                    <h2>Live Video Stream</h2>
-                    <div class="video-container">
-                        <img id="live-video" class="live-video" src="/video_feed" alt="Live Feed">
+                    <h2>Stream Information</h2>
+                    <div class="info-row">
+                        <strong>Stream Status:</strong> 
+                        <span id="stream-status" class="status-offline">Waiting for ESP32-CAM</span>
                     </div>
-                    <div id="stream-status" class="status-offline">Stream: Waiting for ESP32-CAM</div>
-                    <div id="stream-info">
-                        Objects: <span id="object-count">0</span> | 
-                        Last Update: <span id="last-update">-</span>
+                    <div class="info-row">
+                        <strong>Objects Detected:</strong> 
+                        <span id="object-count" style="font-size: 24px; font-weight: bold; color: #2196F3;">0</span>
+                    </div>
+                    <div class="info-row">
+                        <strong>Last Update:</strong> 
+                        <span id="last-update">-</span>
+                    </div>
+                    <div id="detection-info" class="detection-info">
+                        No objects detected yet
                     </div>
                 </div>
 
@@ -147,63 +145,58 @@
 
         // Elements
         const liveVideo = document.getElementById('live-video');
-        const latestDetectionImg = document.getElementById('latest-detection-img');
         const streamStatus = document.getElementById('stream-status');
-        const streamInfo = document.getElementById('stream-info');
         const objectCount = document.getElementById('object-count');
         const lastUpdate = document.getElementById('last-update');
         const detectionInfo = document.getElementById('detection-info');
-        const logsDiv = document.getElementById('logs');
         const galleryDiv = document.getElementById('gallery');
         const locationInfo = document.getElementById('location-info');
         const mapLink = document.getElementById('map-link');
 
         // Socket event handlers
         socket.on('connect', function() {
-            addLog('[system] Connected to server');
-            streamStatus.textContent = 'Stream: Connected to server';
+            console.log('Connected to server');
+            streamStatus.textContent = 'Live';
             streamStatus.className = 'status-online';
         });
 
         socket.on('disconnect', function() {
-            addLog('[system] Disconnected from server');
-            streamStatus.textContent = 'Stream: Offline';
+            console.log('Disconnected from server');
+            streamStatus.textContent = 'Offline';
             streamStatus.className = 'status-offline';
         });
 
-        // Handle video frames via Socket.IO (fallback)
+        // Handle video frames via Socket.IO
         socket.on('video_frame', function(data) {
-            // Update latest detection image
-            latestDetectionImg.src = data.image_data;
+            console.log('Received video frame:', data);
             
             // Update detection info
-            if (data.detected && data.detections.length > 0) {
+            if (data.detected && data.detections && data.detections.length > 0) {
                 const detectionText = data.detections.map(d => 
                     `${d.class} (${(d.confidence * 100).toFixed(1)}%)`
                 ).join(', ');
                 detectionInfo.innerHTML = `<strong>Detected:</strong> ${detectionText}`;
+                detectionInfo.style.background = '#e8f5e8';
             } else {
                 detectionInfo.innerHTML = 'No objects detected';
+                detectionInfo.style.background = '#f5f5f5';
             }
             
             // Update stream info
-            objectCount.textContent = data.count;
-            lastUpdate.textContent = data.timestamp;
+            objectCount.textContent = data.count || 0;
+            lastUpdate.textContent = data.timestamp || new Date().toLocaleTimeString();
         });
 
         // Handle new images for gallery
         socket.on('new_image', function(data) {
-            addLog(`[detection] New image: ${data.filename} - Detected: ${data.detected} (${data.count} objects)`);
-            // Gallery akan diupdate oleh initial data
-        });
-
-        // Handle logs
-        socket.on('new_log', function(data) {
-            addLog(data.log);
+            console.log('New image:', data);
+            // Reload gallery
+            loadGallery();
         });
 
         // Handle location updates
         socket.on('new_location', function(data) {
+            console.log('New location:', data);
             locationInfo.innerHTML = `
                 <strong>Latitude:</strong> ${data.latitude}<br>
                 <strong>Longitude:</strong> ${data.longitude}<br>
@@ -211,7 +204,7 @@
             `;
             mapLink.innerHTML = `
                 <a href="https://maps.google.com/?q=${data.latitude},${data.longitude}" 
-                   target="_blank" style="color: #2196F3;">
+                   target="_blank" style="color: #2196F3; text-decoration: none;">
                    📍 View on Google Maps
                 </a>
             `;
@@ -219,27 +212,36 @@
 
         // Handle initial data
         socket.on('initial', function(data) {
+            console.log('Initial data:', data);
             // Update gallery
-            updateGallery(data.files);
+            if (data.files && data.files.length > 0) {
+                updateGallery(data.files);
+            }
             // Update location
-            if (data.last_location.latitude) {
+            if (data.last_location && data.last_location.latitude) {
                 locationInfo.innerHTML = `
                     <strong>Latitude:</strong> ${data.last_location.latitude}<br>
-                    <strong>Longitude:</strong> ${data.last_location.longitude}
+                    <strong>Longitude:</strong> ${data.last_location.longitude}<br>
+                    <strong>Time:</strong> ${data.last_location.time || '-'}
                 `;
+                if (data.last_location.latitude && data.last_location.longitude) {
+                    mapLink.innerHTML = `
+                        <a href="https://maps.google.com/?q=${data.last_location.latitude},${data.last_location.longitude}" 
+                           target="_blank" style="color: #2196F3; text-decoration: none;">
+                           📍 View on Google Maps
+                        </a>
+                    `;
+                }
             }
         });
 
         // Helper functions
-        function addLog(text) {
-            const logEntry = document.createElement('div');
-            logEntry.textContent = text;
-            logsDiv.appendChild(logEntry);
-            logsDiv.scrollTop = logsDiv.scrollHeight;
-        }
-
         function updateGallery(files) {
             galleryDiv.innerHTML = '';
+            if (!files || files.length === 0) {
+                galleryDiv.innerHTML = '<p style="color: #666;">No images yet</p>';
+                return;
+            }
             files.forEach(file => {
                 const img = document.createElement('img');
                 img.src = `/classified/${file}`;
@@ -250,14 +252,22 @@
             });
         }
 
-        // Refresh latest detection image periodically
-        setInterval(() => {
-            latestDetectionImg.src = '/latest_detection?' + new Date().getTime();
-        }, 1000);
+        function loadGallery() {
+            // Request fresh gallery data
+            fetch('/api/gallery')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.files) {
+                        updateGallery(data.files);
+                    }
+                })
+                .catch(err => console.error('Error loading gallery:', err));
+        }
 
         // Handle video stream errors
         liveVideo.onerror = function() {
-            streamStatus.textContent = 'Stream: Error - Retrying...';
+            console.error('Video stream error');
+            streamStatus.textContent = 'Error - Retrying...';
             streamStatus.className = 'status-offline';
             setTimeout(() => {
                 liveVideo.src = '/video_feed?' + new Date().getTime();
@@ -265,9 +275,15 @@
         };
 
         liveVideo.onload = function() {
-            streamStatus.textContent = 'Stream: Live';
+            console.log('Video stream loaded');
+            streamStatus.textContent = 'Live';
             streamStatus.className = 'status-online';
         };
+
+        // Initial load
+        setTimeout(() => {
+            loadGallery();
+        }, 1000);
     </script>
 </body>
 </html>

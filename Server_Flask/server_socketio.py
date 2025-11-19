@@ -10,6 +10,19 @@ import base64
 import threading
 import time
 import torch
+import pathlib
+import sys
+import queue
+
+
+frame_queue = queue.Queue(maxsize=2)  # Buffer maksimal 2 frame
+processing = False
+
+# Temporary fix for PosixPath issue on Windows
+if sys.platform.startswith('win'):
+    import pathlib
+    temp = pathlib.PosixPath
+    pathlib.PosixPath = pathlib.WindowsPath
 
 # Flask + SocketIO
 app = Flask(__name__, template_folder='templates', static_folder='static')
@@ -30,17 +43,40 @@ frame_lock = threading.Lock()
 # Last known location (untuk GPS nanti, tidak untuk ESP32-CAM)
 last_location = {"latitude": None, "longitude": None}
 
-# Load YOLOv5 Model
+# Load YOLOv5 Models
 print("Loading YOLOv5 model...")
 try:
+    # Alternative method to load YOLOv5 model
+    model_path = r'C:\Users\ADVAN\Documents\Arduino\Smartcane\Smart_cane_project\Server_Flask\models\best.pt'
+    
+    # Verify model file exists
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    print(f"Loading model from: {model_path}")
+    
+    # Load model using torch.hub with simpler approach
     model = torch.hub.load('ultralytics/yolov5', 'custom', 
-                          path=r'C:\Users\ADVAN\Documents\Arduino\Smartcane\Smart_cane_project\Server_Flask\models\best.pt',
-                          force_reload=True)
+                          path=model_path,
+                          force_reload=True,
+                          skip_validation=True)
     model.conf = 0.5  # Confidence threshold
     print("YOLOv5 model loaded successfully!")
+    
 except Exception as e:
     print(f"Error loading YOLOv5 model: {e}")
-    model = None
+    print("Trying alternative loading method...")
+    
+    try:
+        # Alternative: Direct PyTorch load
+        model = torch.load(model_path, map_location='cpu')
+        if hasattr(model, 'model'):
+            model = model.model
+        model.conf = 0.5
+        print("YOLOv5 model loaded via alternative method!")
+    except Exception as e2:
+        print(f"Alternative loading also failed: {e2}")
+        model = None
 
 # Class names sesuai dengan model Anda
 class_names = {
@@ -58,15 +94,26 @@ class_names = {
 
 def detect_objects_yolov5(image_array):
     """
-    Deteksi objek menggunakan YOLOv5
-    Returns: (detected, count, annotated_image, detections_list)
+    Deteksi objek menggunakan YOLOv5 - OPTIMIZED VERSION
     """
     if model is None:
         return False, 0, image_array, []
     
     try:
+        # OPTIMASI: Resize image untuk processing lebih cepat
+        original_height, original_width = image_array.shape[:2]
+        
+        # Untuk kamera bergerak, gunakan resolusi lebih kecil
+        if original_width > 640:
+            scale_factor = 640 / original_width
+            new_width = 640
+            new_height = int(original_height * scale_factor)
+            resized_image = cv2.resize(image_array, (new_width, new_height))
+        else:
+            resized_image = image_array
+        
         # Convert BGR to RGB
-        image_rgb = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+        image_rgb = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
         
         # Perform detection
         results = model(image_rgb)
@@ -74,7 +121,7 @@ def detect_objects_yolov5(image_array):
         # Get detections
         detections = results.pandas().xyxy[0]
         
-        # Annotate image
+        # Annotate original image (bukan resized)
         annotated_image = image_array.copy()
         detection_count = 0
         detections_list = []
@@ -83,23 +130,31 @@ def detect_objects_yolov5(image_array):
             if detection['confidence'] > model.conf:
                 detection_count += 1
                 
-                # Get coordinates
-                x1, y1, x2, y2 = int(detection['xmin']), int(detection['ymin']), int(detection['xmax']), int(detection['ymax'])
+                # Scale coordinates back to original size jika di-resize
+                if original_width > 640:
+                    x1 = int(detection['xmin'] / scale_factor)
+                    y1 = int(detection['ymin'] / scale_factor)
+                    x2 = int(detection['xmax'] / scale_factor)
+                    y2 = int(detection['ymax'] / scale_factor)
+                else:
+                    x1, y1, x2, y2 = int(detection['xmin']), int(detection['ymin']), int(detection['xmax']), int(detection['ymax'])
                 
                 # Get class name
                 class_id = detection['class']
                 class_name = class_names.get(class_id, f'class_{class_id}')
                 confidence = detection['confidence']
                 
-                # Draw bounding box
-                color = (0, 255, 0)  # Green
-                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
-                
-                # Draw label
-                label = f"{class_name} {confidence:.2f}"
-                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                cv2.rectangle(annotated_image, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), color, -1)
-                cv2.putText(annotated_image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                # OPTIMASI: Hanya draw bounding box untuk confidence tinggi
+                if confidence > 0.5:
+                    color = (0, 255, 0)  # Green
+                    cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Draw label (hanya untuk confidence tinggi)
+                    if confidence > 0.7:
+                        label = f"{class_name} {confidence:.2f}"
+                        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                        cv2.rectangle(annotated_image, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), color, -1)
+                        cv2.putText(annotated_image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                 
                 detections_list.append({
                     'class': class_name,
@@ -121,17 +176,21 @@ def write_log(text):
     socketio.emit('new_log', {'log': line})
 
 # ========== ENDPOINT UTAMA UNTUK DASHBOARD DAN STREAMING ==========
+# Tambahkan di bagian global variables (setelah frame_lock)
+processing = False
+frame_counter = 0
+
 @app.route('/', methods=['GET', 'POST'])
 def root():
-    """
-    GET: Menampilkan dashboard
-    POST: Menerima streaming dari ESP32-CAM
-    """
     if request.method == 'GET':
         return render_template('dashboard.html')
     
     # POST request - Handle streaming dari ESP32-CAM
-    global latest_frame, latest_detection_frame
+    global latest_frame, latest_detection_frame, processing, frame_counter
+    
+    # PERUBAHAN 1: Skip frame jika masih processing
+    if processing:
+        return jsonify({"success": True, "skipped": True}), 200
     
     if 'image' not in request.files:
         return jsonify({"success": False, "message": "No image file"}), 400
@@ -141,6 +200,9 @@ def root():
         return jsonify({"success": False, "message": "Empty filename"}), 400
     
     try:
+        processing = True  # PERUBAHAN 2: Set flag processing
+        frame_counter += 1
+        
         # Baca dan proses frame
         image_bytes = file.read()
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
@@ -149,29 +211,27 @@ def root():
         # Deteksi objek dengan YOLOv5
         detected, count, annotated_image, detections = detect_objects_yolov5(image_array)
         
-        # Update frame terbaru untuk streaming
+        # PERUBAHAN 3: Kurangi quality encoding untuk speed
         with frame_lock:
-            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 60])  # 80 -> 60
             latest_frame = buffer.tobytes()
             
             # Simpan juga frame deteksi terakhir untuk Latest Detection
-            _, detection_buffer = cv2.imencode('.jpg', annotated_image)
-            latest_detection_frame = detection_buffer.tobytes()
+            latest_detection_frame = latest_frame  # PERUBAHAN 4: Reuse buffer
         
-        # Konversi ke base64 untuk dikirim via Socket.IO
-        _, buffer = cv2.imencode('.jpg', annotated_image)
-        jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+        # PERUBAHAN 5: Kirim via Socket.IO hanya setiap 2 frame (reduce overhead)
+        if frame_counter % 2 == 0:
+            jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+            
+            socketio.emit('video_frame', {
+                'image_data': f'data:image/jpeg;base64,{jpg_as_text}',
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'detected': detected,
+                'count': count,
+                'detections': detections
+            })
         
-        # Kirim frame ke semua client yang terhubung
-        socketio.emit('video_frame', {
-            'image_data': f'data:image/jpeg;base64,{jpg_as_text}',
-            'timestamp': datetime.now().strftime('%H:%M:%S'),
-            'detected': detected,
-            'count': count,
-            'detections': detections
-        })
-        
-        # Log deteksi jika ada objek terdeteksi
+        # PERUBAHAN 6: Log hanya jika ada deteksi (reduce I/O)
         if detected:
             detection_text = ", ".join([f"{d['class']}({d['confidence']:.2f})" for d in detections])
             write_log(f"Detected: {detection_text}")
@@ -187,6 +247,9 @@ def root():
         print(f"Stream error: {e}")
         write_log(f"Stream error: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
+    
+    finally:
+        processing = False  # PERUBAHAN 7: Reset flag di finally block
 
 @app.route('/classified/<path:filename>')
 def classified_file(filename):
@@ -305,7 +368,7 @@ def send_location():
 def handle_connect():
     print('Client connected')
     # Send initial state: latest files and last_location
-    files = sorted([f for f in os.listdir(CLASSIFIED_FOLDER) if f.lower().endswith(('.jpg','.png'))], reverse=True)[:20]
+    files = sorted([f for f in os.listdir(CLASSIFIED_FOLDER) if f.lower().endswith(('.jpg','.png'))], reverse=True)[:10]
     emit('initial', {'files': files, 'last_location': last_location})
 
 @socketio.on('disconnect')
