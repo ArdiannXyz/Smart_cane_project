@@ -101,6 +101,7 @@ except Exception as e:
 print("\n✓ Model ready for inference!")
 print("=" * 50 + "\n")
 
+# Global variable untuk menyimpan hasil detection terakhir
 last_detection = {"object": "none", "all": []}
 
 def draw_bounding_boxes(image, predictions, class_names):
@@ -155,6 +156,7 @@ def index():
         "endpoints": {
             "health": "/health",
             "upload": "/upload (POST)",
+            "upload_image": "/upload_image (POST)",
             "get_detection": "/get_detection (GET)",
             "test": "/test (GET)"
         }
@@ -168,10 +170,101 @@ def health():
         "platform": platform.system()
     })
 
-@app.route("/upload", methods=["POST"])
+@app.route("/upload", methods=["POST", "GET"])  # Tambahkan GET di sini
 def upload():
     global last_detection
     try:
+        # Jika method GET, berikan instruksi
+        if request.method == "GET":
+            return jsonify({
+                "status": "info",
+                "message": "Use POST method to upload image",
+                "example": "Send image as raw bytes in POST request"
+            }), 200
+            
+        # Method POST - proses upload
+        img_bytes = request.get_data()
+        if not img_bytes:
+            return jsonify({"status": "error", "error": "No image data"}), 400
+            
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        
+        # Save original image
+        idx = len(os.listdir(UPLOAD_FOLDER)) + 1
+        img_path = UPLOAD_FOLDER / f"img_{idx}.jpg"
+        img.save(img_path)
+        
+        # Inference
+        results = model(img, size=640)
+        
+        # Parse results
+        if hasattr(results, 'pred'):
+            predictions = results.pred[0]
+            classes = results.names
+        else:
+            predictions = results.xyxy[0]
+            classes = model.names
+        
+        # Buat copy gambar untuk drawing bounding boxes
+        img_with_boxes = img.copy()
+        
+        detected_classes = []
+        if len(predictions) > 0:
+            # Draw bounding boxes
+            img_with_boxes = draw_bounding_boxes(img_with_boxes, predictions, classes)
+            
+            for pred in predictions:
+                class_id = int(pred[-1])
+                confidence = float(pred[4])
+                detected_classes.append({
+                    "class": classes[class_id],
+                    "confidence": round(confidence, 3),
+                    "bbox": {
+                        "x1": float(pred[0]),
+                        "y1": float(pred[1]),
+                        "x2": float(pred[2]),
+                        "y2": float(pred[3])
+                    }
+                })
+            
+            detected_classes.sort(key=lambda x: x['confidence'], reverse=True)
+            
+        if detected_classes:
+            last_detection = {
+                "object": detected_classes[0]["class"], 
+                "confidence": detected_classes[0]["confidence"],
+                "all": detected_classes
+            }
+        else:
+            last_detection = {"object": "none", "all": []}
+        
+        # Convert image with boxes to base64
+        img_with_boxes_base64 = image_to_base64(img_with_boxes)
+        
+        print(f"✓ Detection: {last_detection['object']}")
+        return jsonify({
+            "status": "ok", 
+            "detected": last_detection,
+            "annotated_image": img_with_boxes_base64
+        })
+        
+    except Exception as e:
+        print(f"✗ Error: {str(e)}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/upload_image", methods=["POST", "GET"])
+def upload_image():
+    global last_detection
+    try:
+        # Jika method GET, berikan instruksi
+        if request.method == "GET":
+            return jsonify({
+                "status": "info",
+                "message": "Use POST method to upload image",
+                "example": "Send image as raw bytes in POST request"
+            }), 200
+            
+        # Method POST - proses upload
         img_bytes = request.get_data()
         if not img_bytes:
             return jsonify({"status": "error", "error": "No image data"}), 400

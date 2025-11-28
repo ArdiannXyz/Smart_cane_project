@@ -17,7 +17,7 @@ import queue
 
 frame_queue = queue.Queue(maxsize=2)  # Buffer maksimal 2 frame
 processing = False
-
+latest_detection = {}
 # Temporary fix for PosixPath issue on Windows
 if sys.platform.startswith('win'):
     import pathlib
@@ -39,6 +39,13 @@ os.makedirs(CLASSIFIED_FOLDER, exist_ok=True)
 latest_frame = None
 latest_detection_frame = None
 frame_lock = threading.Lock()
+# Global variable untuk menyimpan deteksi terakhir
+latest_detection = {
+    "detected": False,
+    "count": 0,
+    "detections": [],
+    "timestamp": None
+}
 
 # Last known location (untuk GPS nanti, tidak untuk ESP32-CAM)
 last_location = {"latitude": None, "longitude": None}
@@ -185,10 +192,8 @@ def root():
     if request.method == 'GET':
         return render_template('dashboard.html')
     
-    # POST request - Handle streaming dari ESP32-CAM
-    global latest_frame, latest_detection_frame, processing, frame_counter
+    global latest_frame, latest_detection_frame, processing, frame_counter, latest_detection
     
-    # PERUBAHAN 1: Skip frame jika masih processing
     if processing:
         return jsonify({"success": True, "skipped": True}), 200
     
@@ -200,26 +205,28 @@ def root():
         return jsonify({"success": False, "message": "Empty filename"}), 400
     
     try:
-        processing = True  # PERUBAHAN 2: Set flag processing
+        processing = True
         frame_counter += 1
         
-        # Baca dan proses frame
         image_bytes = file.read()
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         image_array = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
-        # Deteksi objek dengan YOLOv5
         detected, count, annotated_image, detections = detect_objects_yolov5(image_array)
         
-        # PERUBAHAN 3: Kurangi quality encoding untuk speed
-        with frame_lock:
-            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 60])  # 80 -> 60
-            latest_frame = buffer.tobytes()
-            
-            # Simpan juga frame deteksi terakhir untuk Latest Detection
-            latest_detection_frame = latest_frame  # PERUBAHAN 4: Reuse buffer
+        # UPDATE DETEKSI TERAKHIR
+        latest_detection = {
+            "detected": detected,
+            "count": count,
+            "detections": detections,
+            "timestamp": datetime.now().isoformat()
+        }
         
-        # PERUBAHAN 5: Kirim via Socket.IO hanya setiap 2 frame (reduce overhead)
+        with frame_lock:
+            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            latest_frame = buffer.tobytes()
+            latest_detection_frame = latest_frame
+        
         if frame_counter % 2 == 0:
             jpg_as_text = base64.b64encode(buffer).decode('utf-8')
             
@@ -231,7 +238,6 @@ def root():
                 'detections': detections
             })
         
-        # PERUBAHAN 6: Log hanya jika ada deteksi (reduce I/O)
         if detected:
             detection_text = ", ".join([f"{d['class']}({d['confidence']:.2f})" for d in detections])
             write_log(f"Detected: {detection_text}")
@@ -249,7 +255,20 @@ def root():
         return jsonify({"success": False, "message": str(e)}), 500
     
     finally:
-        processing = False  # PERUBAHAN 7: Reset flag di finally block
+        processing = False
+
+@app.route('/get_latest_detection', methods=['GET', 'POST'])
+def latest_detection_handler():
+    if request.method == 'GET':
+        return jsonify(latest_detection)
+
+    if request.method == 'POST':
+        data = request.get_json(silent=True)
+        print("Received:", data)
+        latest_detection.clear()
+        latest_detection.update(data)
+        return jsonify({"status": "success"})
+
 
 @app.route('/classified/<path:filename>')
 def classified_file(filename):
