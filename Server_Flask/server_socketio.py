@@ -87,16 +87,16 @@ except Exception as e:
 
 # Class names sesuai dengan model Anda
 class_names = {
-    0: 'ch',  # kursi
-    1: 'do',  # pintu
-    2: 'fe',  # pagar
-    3: 'gb',  # tempat sampah
-    4: 'ob',  # halangan
-    5: 'pl',  # tanaman
-    6: 'po',  # lubang
-    7: 'st',  # tangga
-    8: 'ta',  # meja
-    9: 've'   # kendaraan
+    1: 'ch',  # kursi
+    2: 'do',  # pintu
+    3: 'fe',  # pagar
+    4: 'gb',  # tempat sampah
+    5: 'ob',  # halangan
+    6: 'pl',  # tanaman
+    7: 'po',  # lubang
+    8: 'st',  # tangga
+    9: 'ta',  # meja
+    10: 've'   # kendaraan
 }
 
 def detect_objects_yolov5(image_array):
@@ -258,9 +258,9 @@ def root():
         processing = False
 
 @app.route('/get_latest_detection', methods=['GET', 'POST'])
-def latest_detection_handler():
+def get_latest_detection_api():  # ← Nama fungsi diubah
     if request.method == 'GET':
-        return jsonify(latest_detection)
+        return jsonify(latest_detection)  # ← Ini tetap merujuk ke dict global
 
     if request.method == 'POST':
         data = request.get_json(silent=True)
@@ -298,8 +298,8 @@ def video_feed():
                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # Endpoint untuk mendapatkan frame deteksi terakhir (Latest Detection)
-@app.route('/latest_detection')
-def latest_detection():
+@app.route('/latest_detection_image')  # ← Ubah route path
+def latest_detection_image():  # ← Ubah nama fungsi
     with frame_lock:
         if latest_detection_frame is not None:
             return Response(latest_detection_frame, mimetype='image/jpeg')
