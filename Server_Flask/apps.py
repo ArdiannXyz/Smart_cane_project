@@ -21,7 +21,7 @@ if platform.system() == 'Windows':
 
 # Config
 BASE_DIR = Path(__file__).parent.parent
-MODEL_PATH = BASE_DIR / "Server_Flask" / "models" / "best.pt"
+MODEL_PATH = BASE_DIR / "Server_Flask" / "models" / "bestn5.pt"
 UPLOAD_FOLDER = BASE_DIR / "Server_Flask" / "uploads"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)

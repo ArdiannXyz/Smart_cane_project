@@ -49,19 +49,6 @@
             max-height: 400px;
             object-fit: contain;
         }
-        .gallery {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 10px;
-            margin-top: 10px;
-        }
-        .gallery img {
-            width: 100%;
-            height: 100px;
-            object-fit: cover;
-            border-radius: 4px;
-            cursor: pointer;
-        }
         .status-online {
             color: #4CAF50;
             font-weight: bold;
@@ -97,14 +84,6 @@
                         <img id="live-video" class="live-video" src="/video_feed" alt="Live Feed">
                     </div>
                 </div>
-
-                <!-- Gallery -->
-                <div class="card">
-                    <h2>Gallery (recent)</h2>
-                    <div id="gallery" class="gallery">
-                        <!-- Gambar akan dimuat di sini -->
-                    </div>
-                </div>
             </div>
 
             <!-- Kolom Kanan - Informasi -->
@@ -128,13 +107,6 @@
                         No objects detected yet
                     </div>
                 </div>
-
-                <!-- Last Location -->
-                <div class="card">
-                    <h2>Last Location</h2>
-                    <div id="location-info">No location yet</div>
-                    <div id="map-link" style="margin-top: 10px;"></div>
-                </div>
             </div>
         </div>
     </div>
@@ -149,9 +121,6 @@
         const objectCount = document.getElementById('object-count');
         const lastUpdate = document.getElementById('last-update');
         const detectionInfo = document.getElementById('detection-info');
-        const galleryDiv = document.getElementById('gallery');
-        const locationInfo = document.getElementById('location-info');
-        const mapLink = document.getElementById('map-link');
 
         // Socket event handlers
         socket.on('connect', function() {
@@ -187,82 +156,10 @@
             lastUpdate.textContent = data.timestamp || new Date().toLocaleTimeString();
         });
 
-        // Handle new images for gallery
-        socket.on('new_image', function(data) {
-            console.log('New image:', data);
-            // Reload gallery
-            loadGallery();
-        });
-
-        // Handle location updates
-        socket.on('new_location', function(data) {
-            console.log('New location:', data);
-            locationInfo.innerHTML = `
-                <strong>Latitude:</strong> ${data.latitude}<br>
-                <strong>Longitude:</strong> ${data.longitude}<br>
-                <strong>Time:</strong> ${data.time}
-            `;
-            mapLink.innerHTML = `
-                <a href="https://maps.google.com/?q=${data.latitude},${data.longitude}" 
-                   target="_blank" style="color: #2196F3; text-decoration: none;">
-                   📍 View on Google Maps
-                </a>
-            `;
-        });
-
         // Handle initial data
         socket.on('initial', function(data) {
             console.log('Initial data:', data);
-            // Update gallery
-            if (data.files && data.files.length > 0) {
-                updateGallery(data.files);
-            }
-            // Update location
-            if (data.last_location && data.last_location.latitude) {
-                locationInfo.innerHTML = `
-                    <strong>Latitude:</strong> ${data.last_location.latitude}<br>
-                    <strong>Longitude:</strong> ${data.last_location.longitude}<br>
-                    <strong>Time:</strong> ${data.last_location.time || '-'}
-                `;
-                if (data.last_location.latitude && data.last_location.longitude) {
-                    mapLink.innerHTML = `
-                        <a href="https://maps.google.com/?q=${data.last_location.latitude},${data.last_location.longitude}" 
-                           target="_blank" style="color: #2196F3; text-decoration: none;">
-                           📍 View on Google Maps
-                        </a>
-                    `;
-                }
-            }
         });
-
-        // Helper functions
-        function updateGallery(files) {
-            galleryDiv.innerHTML = '';
-            if (!files || files.length === 0) {
-                galleryDiv.innerHTML = '<p style="color: #666;">No images yet</p>';
-                return;
-            }
-            files.forEach(file => {
-                const img = document.createElement('img');
-                img.src = `/classified/${file}`;
-                img.alt = file;
-                img.title = file;
-                img.onclick = () => window.open(img.src, '_blank');
-                galleryDiv.appendChild(img);
-            });
-        }
-
-        function loadGallery() {
-            // Request fresh gallery data
-            fetch('/api/gallery')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.files) {
-                        updateGallery(data.files);
-                    }
-                })
-                .catch(err => console.error('Error loading gallery:', err));
-        }
 
         // Handle video stream errors
         liveVideo.onerror = function() {
@@ -279,11 +176,6 @@
             streamStatus.textContent = 'Live';
             streamStatus.className = 'status-online';
         };
-
-        // Initial load
-        setTimeout(() => {
-            loadGallery();
-        }, 1000);
     </script>
 </body>
 </html>

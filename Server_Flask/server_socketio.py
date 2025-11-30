@@ -54,7 +54,7 @@ last_location = {"latitude": None, "longitude": None}
 print("Loading YOLOv5 model...")
 try:
     # Alternative method to load YOLOv5 model
-    model_path = r'C:\Users\ADVAN\Documents\Arduino\Smartcane\Smart_cane_project\Server_Flask\models\best.pt'
+    model_path = r'C:\Users\USER\OneDrive\Documents\GitHub\Smart_cane_project\Server_Flask\models\best2.pt'
     
     # Verify model file exists
     if not os.path.exists(model_path):
