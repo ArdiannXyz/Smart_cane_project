@@ -1,48 +1,63 @@
-
-
 import cv2
 import os
 from pathlib import Path
 from tqdm import tqdm
+import numpy as np
 
-# Folder dataset
+# Folder input & output
 input_folder = Path("dataset/images")
-output_folder = Path("dataset/images-preprocessed")
-
-# Buat folder output jika belum ada
-output_folder.mkdir(exist_ok=True, parents=True)
-
-# Target size sesuai YOLOv5n-Seg
-TARGET_SIZE = 640
+output_folder = Path("dataset/preprocessed-images")
+output_folder.mkdir(parents=True, exist_ok=True)
 
 def preprocess_image(img):
-    # Resize
-    img_resized = cv2.resize(img, (TARGET_SIZE, TARGET_SIZE))
 
-    # BGR → RGB (tidak wajib disimpan, hanya jika ingin konsisten)
-    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+    # ---- 1. CLAHE pada channel L (LAB) ----
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
 
-    return img_rgb
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    l_clahe = clahe.apply(l)
+
+    lab_clahe = cv2.merge((l_clahe, a, b))
+    img_clahe = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+
+    # ---- 2. Gaussian Blur ----
+    img_blur = cv2.GaussianBlur(img_clahe, (3, 3), 0)
+
+    # ---- 3. Normalisasi 0–255 ----
+    img_norm = cv2.normalize(img_blur, None, alpha=0, beta=255,
+                             norm_type=cv2.NORM_MINMAX)
+
+    return img_norm
 
 
-# Loop semua gambar
-image_files = list(input_folder.glob("."))
+# ==== LOOP UNTUK SEMUA GAMBAR ====
+def process_dataset():
+    # Membaca berbagai format gambar
+    exts = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
+    image_files = []
 
-print(f"Total gambar ditemukan: {len(image_files)}")
+    for e in exts:
+        image_files += list(input_folder.rglob(e))
 
-for img_path in tqdm(image_files):
-    img = cv2.imread(str(img_path))
+    if len(image_files) == 0:
+        print("❌ Tidak ada file gambar ditemukan di folder input.")
+        return
 
-    if img is None:
-        print(f"GAMBAR RUSAK: {img_path}")
-        continue
+    for img_path in tqdm(image_files, desc="Preprocessing images"):
+        img = cv2.imread(str(img_path))
 
-    processed = preprocess_image(img)
+        if img is None:
+            print(f"⚠ Gambar rusak atau tidak bisa dibaca: {img_path}")
+            continue
 
-    # Nama file output
-    out_path = output_folder / img_path.name
+        processed = preprocess_image(img)
 
-    # Simpan (YOLO training tidak butuh normalisasi disimpan)
-    cv2.imwrite(str(out_path), cv2.cvtColor(processed, cv2.COLOR_RGB2BGR))
+        save_path = output_folder / img_path.name
+        cv2.imwrite(str(save_path), processed)
 
-print("Preprocessing selesai! Hasil disimpan di folder: dataset/images-preprocessed")
+    print("Preprocessing selesai!")
+
+
+if __name__ == "__main__":
+    process_dataset()

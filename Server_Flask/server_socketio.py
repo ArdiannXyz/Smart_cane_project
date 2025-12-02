@@ -54,7 +54,7 @@ last_location = {"latitude": None, "longitude": None}
 print("Loading YOLOv5 model...")
 try:
     # Alternative method to load YOLOv5 model
-    model_path = r'C:\Users\USER\OneDrive\Documents\GitHub\Smart_cane_project\Server_Flask\models\best2.pt'
+    model_path = r'C:\laragon\www\Smart_cane_project\Server_Flask\models\best.pt'
     
     # Verify model file exists
     if not os.path.exists(model_path):
@@ -87,16 +87,16 @@ except Exception as e:
 
 # Class names sesuai dengan model Anda
 class_names = {
-    1: 'ch',  # kursi
-    2: 'do',  # pintu
-    3: 'fe',  # pagar
-    4: 'gb',  # tempat sampah
-    5: 'ob',  # halangan
-    6: 'pl',  # tanaman
-    7: 'po',  # lubang
-    8: 'st',  # tangga
-    9: 'ta',  # meja
-    10: 've'   # kendaraan
+    0: 'ch',  # kursi
+    1: 'do',  # pintu
+    2: 'fe',  # pagar
+    3: 'gb',  # tempat sampah
+    4: 'ob',  # halangan
+    5: 'pl',  # tanaman
+    6: 'po',  # lubang
+    7: 'st',  # tangga
+    8: 'ta',  # meja
+    9: 've'   # kendaraan
 }
 
 def detect_objects_yolov5(image_array):
@@ -151,13 +151,13 @@ def detect_objects_yolov5(image_array):
                 class_name = class_names.get(class_id, f'class_{class_id}')
                 confidence = detection['confidence']
                 
-                # OPTIMASI: Hanya draw bounding box untuk confidence tinggi
-                if confidence > 0.5:
+                # OPTIMASI: Hanya draw bounding box untuk confidence
+                if confidence > 0.4:
                     color = (0, 255, 0)  # Green
                     cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
                     
-                    # Draw label (hanya untuk confidence tinggi)
-                    if confidence > 0.7:
+                    # Draw label ()
+                    if confidence > 0.4:
                         label = f"{class_name} {confidence:.2f}"
                         label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
                         cv2.rectangle(annotated_image, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), color, -1)
@@ -258,9 +258,9 @@ def root():
         processing = False
 
 @app.route('/get_latest_detection', methods=['GET', 'POST'])
-def get_latest_detection_api():  # ← Nama fungsi diubah
+def get_latest_detection_api():  
     if request.method == 'GET':
-        return jsonify(latest_detection)  # ← Ini tetap merujuk ke dict global
+        return jsonify(latest_detection)  #merujuk ke dict global
 
     if request.method == 'POST':
         data = request.get_json(silent=True)
@@ -299,7 +299,7 @@ def video_feed():
 
 # Endpoint untuk mendapatkan frame deteksi terakhir (Latest Detection)
 @app.route('/latest_detection_image')  # ← Ubah route path
-def latest_detection_image():  # ← Ubah nama fungsi
+def latest_detection_image():  
     with frame_lock:
         if latest_detection_frame is not None:
             return Response(latest_detection_frame, mimetype='image/jpeg')
