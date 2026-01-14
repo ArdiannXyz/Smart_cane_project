@@ -1,56 +1,74 @@
-// =======================================================
-// ALL-IN-ONE ESP32-CAM SCRIPT
-// Menggabungkan esp32_cam.ino + camera_pins.h
-// =======================================================
-
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-// =======================================================
-// CAMERA PINS (AI-Thinker ESP32-CAM)
-// =======================================================
-#define PWDN_GPIO_NUM    32
-#define RESET_GPIO_NUM   -1
-#define XCLK_GPIO_NUM    0
-#define SIOD_GPIO_NUM    26
-#define SIOC_GPIO_NUM    27
-#define Y9_GPIO_NUM      35
-#define Y8_GPIO_NUM      34
-#define Y7_GPIO_NUM      39
-#define Y6_GPIO_NUM      36
-#define Y5_GPIO_NUM      21
-#define Y4_GPIO_NUM      19
-#define Y3_GPIO_NUM      18
-#define Y2_GPIO_NUM      5
-#define VSYNC_GPIO_NUM   25
-#define HREF_GPIO_NUM    23
-#define PCLK_GPIO_NUM    22
+// ===== KONFIGURASI =====
+const char* ssid = "Tobat le";
+const char* password = "Alhamdulillah";
+const char* serverUrl = "http://10.118.138.254:5050";
 
-// =======================================================
-// WIFI + SERVER CONFIG
-// =======================================================
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
-const char* server_url = "http://192.168.1.50:5000/upload";
+// ===== PIN KAMERA AI-THINKER =====
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
 
-// =======================================================
-// SETUP
-// =======================================================
+// ===== SETTING RINGAN =====
+const unsigned long streamInterval = 66;  // 15 FPS
+unsigned long lastStreamTime = 0;
+int frameCount = 0;
+
 void setup() {
   Serial.begin(115200);
-  Serial.setDebugOutput(false);
-
+  Serial.println("\n=== ESP32-CAM Stream ===\n");
+  
+  // Init kamera
+  if (!initCamera()) {
+    Serial.println("Camera GAGAL!");
+    delay(3000);
+    ESP.restart();
+  }
+  Serial.println("Camera OK");
+  
   // Connect WiFi
   WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
     Serial.print(".");
-    delay(300);
   }
-  Serial.println("\nWiFi connected");
+  Serial.println("\nWiFi OK");
+  Serial.println("IP: " + WiFi.localIP().toString());
+  Serial.println("\n>>> Streaming dimulai <<<\n");
+}
 
-  // Camera config
+void loop() {
+  // Cek WiFi
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi putus!");
+    delay(5000);
+    return;
+  }
+  
+  // Kirim frame setiap interval
+  if (millis() - lastStreamTime >= streamInterval) {
+    lastStreamTime = millis();
+    sendFrame();
+  }
+}
+
+bool initCamera() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -70,51 +88,117 @@ void setup() {
   config.pin_sscb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.xclk_freq_hz = 10000000;
   config.pixel_format = PIXFORMAT_JPEG;
+  config.grab_mode = CAMERA_GRAB_LATEST;
+  
+  // Setting RINGAN untuk performa
+  if (psramFound()) {
+    config.frame_size = FRAMESIZE_VGA;   // 640x480
+    config.jpeg_quality = 12;
+    config.fb_count = 2;
+  } else {
+    config.frame_size = FRAMESIZE_QVGA;  // 320x240
+    config.jpeg_quality = 12;  // Lebih baik (10 = best, 63 = worst)
+config.fb_count = 1;
+  }
+  
+  // Init
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) return false;
+  
+  // Setting sensor minimal
+  sensor_t * s = esp_camera_sensor_get();
+  if (s) {
+    s->set_brightness(s, 0);
+    s->set_contrast(s, 0);
+    s->set_saturation(s, 0);
+    s->set_whitebal(s, 1);
+    s->set_awb_gain(s, 1);
+    s->set_exposure_ctrl(s, 1);
+    s->set_gain_ctrl(s, 1);
+    s->set_lenc(s, 1);
+  }
+  
+  return true;
+}
 
-  config.frame_size = FRAMESIZE_QVGA;
-  config.jpeg_quality = 12;
-  config.fb_count = 1;
-
-  if (esp_camera_init(&config) != ESP_OK) {
-    Serial.println("Camera init failed");
-    while (true) delay(1000);
+void checkWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi reconnecting...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi reconnected!");
+    } else {
+      Serial.println("\nGagal reconnect, restart...");
+      ESP.restart();
+    }
   }
 }
 
-// =======================================================
-// LOOP
-// =======================================================
-void loop() {
+void sendFrame() {
+  // Capture
   camera_fb_t * fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    delay(1000);
+  if (!fb || fb->len == 0) {
+    if (fb) esp_camera_fb_return(fb);
     return;
   }
-
-  // POST image to server
-  if (WiFi.status() == WL_CONNECTED) {
-    WiFiClient client;
-    HTTPClient http;
-
-    http.begin(server_url);
-    http.addHeader("Content-Type", "image/jpeg");
-
-    int httpCode = http.POST(fb->buf, fb->len);
-
-    if (httpCode > 0) {
-      String resp = http.getString();
-      Serial.printf("Upload code: %d, resp: %s\n", httpCode, resp.c_str());
+  
+  // HTTP POST
+  HTTPClient http;
+  WiFiClient client;
+  
+  http.begin(client, serverUrl);
+  http.setTimeout(3000);
+  
+  // Multipart boundary
+  String boundary = "----ESP32CAM";
+  String head = "--" + boundary + "\r\n"
+                "Content-Disposition: form-data; name=\"image\"; filename=\"frame.jpg\"\r\n"
+                "Content-Type: image/jpeg\r\n\r\n";
+  String tail = "\r\n--" + boundary + "--\r\n";
+  
+  // Set header
+  http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+  http.addHeader("Content-Length", String(head.length() + fb->len + tail.length()));
+  
+  // Alokasi buffer
+  size_t totalLen = head.length() + fb->len + tail.length();
+  uint8_t* payload = (uint8_t*)malloc(totalLen);
+  
+  if (payload) {
+    // Copy data
+    memcpy(payload, head.c_str(), head.length());
+    memcpy(payload + head.length(), fb->buf, fb->len);
+    memcpy(payload + head.length() + fb->len, tail.c_str(), tail.length());
+    
+    // Kirim
+    int httpCode = http.POST(payload, totalLen);
+    free(payload);
+    
+    // Status
+    frameCount++;
+    if (httpCode == 200) {
+      // Log setiap 25 frame
+      if (frameCount % 25 == 0) {
+        Serial.printf("Frame: %d | Size: %dKB | WiFi: %ddBm\n", 
+                      frameCount, fb->len/1024, WiFi.RSSI());
+      }
     } else {
-      Serial.printf("Upload failed, code: %d\n", httpCode);
+      Serial.printf("Error: %d\n", httpCode);
     }
-
+    
     http.end();
   }
-
+  
   esp_camera_fb_return(fb);
-
-  delay(1000);  // capture each 1 second
 }

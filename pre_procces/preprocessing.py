@@ -42,6 +42,8 @@ def process_dataset():
 
     if len(image_files) == 0:
         print("Tidak ada file gambar ditemukan di folder input.")
+
+        print("❌ Tidak ada file gambar ditemukan di folder input.")
         return
 
     for img_path in tqdm(image_files, desc="Preprocessing images"):
@@ -49,6 +51,8 @@ def process_dataset():
 
         if img is None:
             print(f"Gambar rusak atau tidak bisa dibaca: {img_path}")
+            print(f"⚠ Gambar rusak atau tidak bisa dibaca: {img_path}")
+
             continue
 
         processed = preprocess_image(img)
